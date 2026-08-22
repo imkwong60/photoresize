@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ImageResizer Pro（本地證件相批量處理）</title>
+    <!-- 本地 Tailwind CSS -->
+    <link rel="stylesheet" href="./css/styles.css">
+    <!-- 本地 JSZip -->
+    <script src="./js/jszip.min.js"></script>
+</head>
+<body class="text-gray-800 min-h-screen flex flex-col">
+
+    <nav class="bg-white shadow-sm sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+                <h1 class="text-xl font-bold text-gray-900 tracking-tight">ImageResizer Pro</h1><span class="hidden sm:inline text-xs text-gray-400 ml-2">入台證／護照／回鄉證／國際車牌</span>
+            </div>
+            <div>
+                <button id="btn-batch-download" class="hidden bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors shadow-sm flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                    批次下載 ZIP
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <main class="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
+        
+        <!-- Dropzone -->
+        <div id="dropzone" class="border-2 border-dashed border-gray-300 rounded-2xl p-10 text-center bg-white cursor-pointer hover:border-blue-500 hover:bg-gray-50 transition-all duration-200 ease-in-out group">
+            <input type="file" id="file-input" multiple accept="image/*" class="hidden">
+            <div class="flex flex-col items-center justify-center">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 text-gray-400 group-hover:text-blue-500 mb-4 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+                <h3 class="text-lg font-semibold text-gray-700">點擊或拖曳圖片到此處上傳</h3>
+                <p class="text-sm text-gray-500 mt-2">支援 JPG, PNG, WebP (所有處理皆在本地端完成，不上傳伺服器)</p>
+            </div>
+        </div>
+
+        <!-- Image Gallery -->
+        <div id="image-gallery" class="mt-8 grid grid-cols-1 gap-8 empty:hidden">
+            <!-- 圖片卡片會動態注入到這裡 -->
+        </div>
+
+    </main>
+
+    <script>
+        /**
+         * State Management
+         */
+        const imagesData = new Map();
+        let idCounter = 0;
+        const DPI = 300; // 列印品質 DPI，用於 mm 轉換 px
+
+        // 常用尺寸預設列表
+        const PRESETS = [
+            { label: '自訂尺寸', width: null, height: null, unit: 'px' },
+            // —— 香港常用證件 ——
+            { label: '入台證 (35×45 mm)', width: 35, height: 45, unit: 'mm' },
+            { label: '香港特區護照 (40×50 mm)', width: 40, height: 50, unit: 'mm' },
+            { label: '國際駕駛許可證 (40×50 mm)', width: 40, height: 50, unit: 'mm' },
+            { label: '回鄉證 (33×48 mm)', width: 33, height: 48, unit: 'mm' },
+            { label: '證件照 2吋 (35×45 mm)', width: 35, height: 45, unit: 'mm' },
+            // —— 其他常用 ——
+            { label: '2R 照片 (89×127 mm)', width: 89, height: 127, unit: 'mm' },
+            { label: '3R 照片 (127×178 mm)', width: 127, height: 178, unit: 'mm' },
+            { label: 'YouTube 縮圖 (1280×720)', width: 1280, height: 720, unit: 'px' },
+            { label: 'IG 貼文 方形 (1080×1080)', width: 1080, height: 1080, unit: 'px' },
+            { label: 'IG 貼文 直向 (1080×1350)', width: 1080, height: 1350, unit: 'px' },
+            { label: 'IG Story 限動 (1080×1920)', width: 1080, height: 1920, unit: 'px' },
+            { label: 'PWA Icon (192×192)', width: 192, height: 192, unit: 'px' },
+            { label: 'PWA Icon (512×512)', width: 512, height: 512, unit: 'px' },
+            { label: '回鄉證數碼 (354×472 px)', width: 354, height: 472, unit: 'px' },
+            { label: '護照數碼最低 (1200×1600 px)', width: 1200, height: 1600, unit: 'px' }
+        ];
+
+        // 核心 DOM 元素
+        const dropzone = document.getElementById('dropzone');
+        const fileInput = document.getElementById('file-input');
+        const gallery = document.getElementById('image-gallery');
+        const btnBatchDownload = document.getElementById('btn-batch-download');
+
+        
+        /**
+         * 簡單的防抖函數，確保連續輸入尺寸時不卡頓
+         */
+        function debounce(func, wait) {
+            let timeout;
+            return function executedFunction(...args) {
+                const later = () => {
+                    clearTimeout(timeout);
+                    func(...args);
+                };
+                clearTimeout(timeout);
+                timeout = setTimeout(later, wait);
+            };
+        }
+
+        /**
+         * 單位換算
+         */
+        function mmToPx(mm) {
+            return Math.round((mm * DPI) / 25.4);
+        }
+        function pxToMm(px) {
+            return Number(((px * 25.4) / DPI).toFixed(2));
+        }
+
+
+        // 綁定 Dropzone 事件
+        dropzone.addEventListener('click', () => fileInput.click());
+        dropzone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropzone.classList.add('dropzone-active');
+        });
+        dropzone.addEventListener('dragleave', () => {
+            dropzone.classList.remove('dropzone-active');
+        });
+        dropzone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropzone.classList.remove('dropzone-active');
+            if (e.dataTransfer.files.length) {
+                processFiles(e.dataTransfer.files);
+            }
+        });
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length) {
+                processFiles(e.target.files);
+            }
+            fileInput.value = ''; // Reset
+        });
+
+
+        /**
+         * 處理上傳的檔案
+         */
+        function processFiles(files) {
+            Array.from(files).forEach(file => {
+                if (!file.type.startsWith('image/')) return;
+
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const id = `img_${idCounter++}`;
+                        // 初始化圖片設定
+                        imagesData.set(id, {
+                            id: id,
+                            file: file,
+                            originalName: file.name.replace(/\.[^/.]+$/, ""), // 移除副檔名
+                            originalImg: img,
+                            settings: {
+                                width: img.width,
+                                height: img.height,
+                                unit: 'px', // 'px' or 'mm'
+                                bgColor: 'transparent', // 'transparent', '#000000', '#ffffff', 'custom'
+                                customBgColor: '#ff0000'
+                            }
+                        });
+                        
+                        renderImageCard(id);
+                        updateBatchDownloadButton();
+                    };
+                    img.src = e.target.result;
+                };
+                reader.readAsDataURL(file);
+            });
+        }
+
+        /**
+         * 渲染單一圖片的控制卡片
+         */
+        function renderImageCard(id) {
+            const data = imagesData.get(id);
+            const { settings, originalName, originalImg } = data;
+
+            const card = document.createElement('div');
+            card.id = `card-${id}`;
+            card.className = "bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col md:flex-row transition-all";
+
+            // 生成預設選項 HTML
+            const presetsHTML = PRESETS.map((p, index) => 
+                `<option value="${index}" ${p.width === null ? 'selected' : ''}>${p.label}</option>`
+            ).join('');
+
+            card.innerHTML = `
+                <!-- 左側：畫布預覽區 -->
+                <div class="md:w-5/12 bg-checker p-6 flex flex-col items-center justify-center relative min-h-[300px] border-b md:border-b-0 md:border-r border-gray-100">
+                    <div id="preview-container-${id}" class="relative w-full h-full flex items-center justify-center">
+                        <!-- Canvas 將會附加在這裡 -->
+                    </div>
+                    <div class="absolute bottom-4 left-4 bg-black/60 text-white text-xs px-2 py-1 rounded backdrop-blur-sm" id="info-${id}">
+                        渲染中...
+                    </div>
+                </div>
+
+                <!-- 右側：控制面板 -->
+                <div class="md:w-7/12 p-6 flex flex-col gap-5">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <h4 class="font-bold text-gray-800 text-lg line-clamp-1" title="${data.file.name}">${data.file.name}</h4>
+                            <p class="text-xs text-gray-500">原始尺寸: ${originalImg.width} × ${originalImg.height} px</p>
+                        </div>
+                        <button onclick="removeImage('${id}')" class="text-red-500 hover:bg-red-50 p-2 rounded-lg transition-colors">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                        </button>
+                    </div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <!-- 快捷尺寸選擇 -->
+                        <div class="sm:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">常用比例 / 尺寸預設</label>
+                            <select id="preset-${id}" class="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-gray-50">
+                                ${presetsHTML}
+                            </select>
+                        </div>
+
+                        <!-- 寬度與高度輸入 -->
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">目標寬度 (Width)</label>
+                            <div class="flex">
+                                <input type="number" id="width-${id}" value="${settings.width}" min="1" max="10000" class="w-full border border-gray-300 rounded-l-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                                <select id="unit-w-${id}" class="bg-gray-100 border border-l-0 border-gray-300 rounded-r-lg px-2 text-sm text-gray-600 outline-none">
+                                    <option value="px" ${settings.unit === 'px' ? 'selected' : ''}>px</option>
+                                    <option value="mm" ${settings.unit === 'mm' ? 'selected' : ''}>mm</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">目標高度 (Height)</label>
+                            <div class="flex">
+                                <input type="number" id="height-${id}" value="${settings.height}" min="1" max="10000" class="w-full border border-gray-300 rounded-l-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                                <select id="unit-h-${id}" class="bg-gray-100 border border-l-0 border-gray-300 rounded-r-lg px-2 text-sm text-gray-600 outline-none" disabled>
+                                    <option value="px" ${settings.unit === 'px' ? 'selected' : ''}>px</option>
+                                    <option value="mm" ${settings.unit === 'mm' ? 'selected' : ''}>mm</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 背景填充設定 -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">背景填充色 (比例不符時)</label>
+                        <div class="flex items-center gap-3">
+                            <button class="bg-btn-${id} w-8 h-8 rounded-full border-2 border-blue-500 shadow-sm bg-checker relative" data-color="transparent" title="透明背景"></button>
+                            <button class="bg-btn-${id} w-8 h-8 rounded-full border-2 border-gray-200 shadow-sm bg-white" data-color="#ffffff" title="白色"></button>
+                            <button class="bg-btn-${id} w-8 h-8 rounded-full border-2 border-gray-200 shadow-sm bg-black" data-color="#000000" title="黑色"></button>
+                            <div class="relative flex items-center">
+                                <input type="color" id="custom-color-${id}" value="#ff0000" class="w-8 h-8 rounded cursor-pointer border-0 p-0 opacity-0 absolute z-10" title="自訂顏色">
+                                <button class="bg-btn-${id} w-8 h-8 rounded-full border-2 border-gray-200 shadow-sm bg-red-500 relative z-0 flex items-center justify-center" id="custom-color-btn-${id}" data-color="custom">
+                                   <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-white drop-shadow" viewBox="0 0 20 20" fill="currentColor">
+                                      <path fill-rule="evenodd" d="M4 2a2 2 0 00-2 2v11a3 3 0 106 0V4a2 2 0 00-2-2H4zm1 14a1 1 0 100-2 1 1 0 000 2zm5-1.757l4.9-4.9a2 2 0 000-2.828L13.485 5.1a2 2 0 00-2.828 0L10 5.757v8.486zM16 18H9.071l6-6H16a2 2 0 012 2v2a2 2 0 01-2 2z" clip-rule="evenodd" />
+                                   </svg>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mt-auto pt-4 border-t border-gray-100 space-y-3">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">匯出格式</label>
+                            <div class="flex gap-2">
+                                <select id="format-${id}" class="flex-1 border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-gray-50">
+                                    <option value="png" selected>PNG（支援透明背景）</option>
+                                    <option value="jpeg">JPG / JPEG</option>
+                                </select>
+                                <input type="number" id="quality-${id}" value="92" min="50" max="100" step="1" title="JPG 品質 %" class="w-20 border border-gray-300 rounded-lg p-2.5 text-sm text-center" disabled>
+                            </div>
+                            <p class="text-xs text-gray-400 mt-1">JPG 時可調品質（50–100）；透明背景請用 PNG</p>
+                        </div>
+                        <button onclick="downloadSingle('${id}')" class="w-full bg-gray-900 hover:bg-gray-800 text-white py-2.5 rounded-lg font-medium transition-colors flex justify-center items-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                            </svg>
+                            下載此圖片
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            gallery.appendChild(card);
+
+            
+            // 綁定 DOM 元素
+            const widthInput = document.getElementById(`width-${id}`);
+            const heightInput = document.getElementById(`height-${id}`);
+            const unitWSelect = document.getElementById(`unit-w-${id}`);
+            const unitHSelect = document.getElementById(`unit-h-${id}`);
+            const presetSelect = document.getElementById(`preset-${id}`);
+            const bgBtns = document.querySelectorAll(`.bg-btn-${id}`);
+            const customColorInput = document.getElementById(`custom-color-${id}`);
+            const customColorBtn = document.getElementById(`custom-color-btn-${id}`);
+
+            // 更新預覽畫面 (帶有防抖)
+            const triggerUpdate = debounce(() => {
+                updateCanvas(id);
+            }, 150); // 150ms 延遲確保輸入流暢
+
+            // 事件: 變更尺寸輸入
+            const handleDimensionChange = () => {
+                let w = parseFloat(widthInput.value) || 1;
+                let h = parseFloat(heightInput.value) || 1;
+                presetSelect.value = "0"; // 跳回自訂尺寸
+                settings.width = w;
+                settings.height = h;
+                triggerUpdate();
+            };
+            widthInput.addEventListener('input', handleDimensionChange);
+            heightInput.addEventListener('input', handleDimensionChange);
+
+            // 事件: 變更單位
+            unitWSelect.addEventListener('change', (e) => {
+                const newUnit = e.target.value;
+                unitHSelect.value = newUnit; // 同步另一個 Select
+                
+                // 轉換當前數值
+                if (newUnit === 'mm' && settings.unit === 'px') {
+                    settings.width = pxToMm(settings.width);
+                    settings.height = pxToMm(settings.height);
+                } else if (newUnit === 'px' && settings.unit === 'mm') {
+                    settings.width = mmToPx(settings.width);
+                    settings.height = mmToPx(settings.height);
+                }
+                
+                settings.unit = newUnit;
+                widthInput.value = settings.width;
+                heightInput.value = settings.height;
+                triggerUpdate();
+            });
+
+            // 事件: 選擇 Preset
+            presetSelect.addEventListener('change', (e) => {
+                const presetIndex = parseInt(e.target.value);
+                if (presetIndex === 0) return; // 自訂尺寸不處理
+
+                const preset = PRESETS[presetIndex];
+                settings.unit = preset.unit;
+                settings.width = preset.width;
+                settings.height = preset.height;
+
+                // 更新 UI
+                unitWSelect.value = preset.unit;
+                unitHSelect.value = preset.unit;
+                widthInput.value = preset.width;
+                heightInput.value = preset.height;
+                
+                triggerUpdate();
+            });
+
+            // 事件: 背景顏色選擇
+            bgBtns.forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    // 重置所有邊框
+                    bgBtns.forEach(b => {
+                        b.classList.remove('border-blue-500');
+                        b.classList.add('border-gray-200');
+                    });
+                    // 標記選中
+                    const targetBtn = e.currentTarget;
+                    targetBtn.classList.remove('border-gray-200');
+                    targetBtn.classList.add('border-blue-500');
+                    
+                    settings.bgColor = targetBtn.dataset.color;
+                    triggerUpdate();
+                });
+            });
+
+            // 事件: 自訂顏色變更
+            customColorInput.addEventListener('input', (e) => {
+                settings.customBgColor = e.target.value;
+                customColorBtn.style.backgroundColor = e.target.value;
+                
+                // 自動選中自訂顏色按鈕
+                customColorBtn.click();
+            });
+
+            // 事件: 匯出格式
+            const formatSelect = document.getElementById(`format-${id}`);
+            const qualityInput = document.getElementById(`quality-${id}`);
+            formatSelect.addEventListener('change', () => {
+                const isJpeg = formatSelect.value === 'jpeg';
+                qualityInput.disabled = !isJpeg;
+                // JPG 不支援透明，若目前是透明則自動改白底
+                if (isJpeg && settings.bgColor === 'transparent') {
+                    settings.bgColor = '#ffffff';
+                    document.querySelectorAll(`.bg-btn-${id}`).forEach(b => {
+                        b.classList.remove('border-blue-500');
+                        b.classList.add('border-gray-200');
+                        if (b.dataset.color === '#ffffff') {
+                            b.classList.remove('border-gray-200');
+                            b.classList.add('border-blue-500');
+                        }
+                    });
+                    updateCanvas(id);
+                }
+            });
+
+            // 初次繪製 Canvas
+            updateCanvas(id);
+        }
+
+
+        /**
+         * 重新繪製指定 ID 的 Canvas 並更新畫面
+         */
+        function updateCanvas(id) {
+            const data = imagesData.get(id);
+            if (!data) return;
+
+            const { settings, originalImg } = data;
+            
+            // 計算最終輸出的像素尺寸
+            let pixelW = settings.width;
+            let pixelH = settings.height;
+
+            if (settings.unit === 'mm') {
+                pixelW = mmToPx(settings.width);
+                pixelH = mmToPx(settings.height);
+            }
+
+            // 創建虛擬 Canvas 進行繪製
+            const canvas = document.createElement('canvas');
+            canvas.width = pixelW;
+            canvas.height = pixelH;
+            const ctx = canvas.getContext('2d');
+
+            // 1. 填滿背景色 (如果不是透明)
+            if (settings.bgColor !== 'transparent') {
+                ctx.fillStyle = settings.bgColor === 'custom' ? settings.customBgColor : settings.bgColor;
+                ctx.fillRect(0, 0, pixelW, pixelH);
+            }
+
+            // 2. 計算 Object-fit: contain 的縮放與位置
+            const scale = Math.min(pixelW / originalImg.width, pixelH / originalImg.height);
+            const drawW = originalImg.width * scale;
+            const drawH = originalImg.height * scale;
+            const dx = (pixelW - drawW) / 2;
+            const dy = (pixelH - drawH) / 2;
+
+            // 3. 繪製原圖
+            ctx.drawImage(originalImg, dx, dy, drawW, drawH);
+
+            // 儲存最新的 canvas 實例到 data 供下載使用
+            data.currentCanvas = canvas;
+
+            // 4. 更新畫面預覽 (為了效能，我們不直接 append 巨大 canvas，而是設定 CSS 限制顯示大小)
+            const container = document.getElementById(`preview-container-${id}`);
+            container.innerHTML = ''; // 清空舊的
+            
+            // 複製一個預覽用的 canvas 來顯示，避免 CSS 縮放導致排版問題
+            const previewCanvas = document.createElement('canvas');
+            previewCanvas.width = pixelW;
+            previewCanvas.height = pixelH;
+            const pCtx = previewCanvas.getContext('2d');
+            pCtx.drawImage(canvas, 0, 0);
+            
+            // 加入 Tailwind classes 讓預覽圖保持在容器內
+            previewCanvas.className = "max-w-full max-h-full object-contain shadow-sm border border-gray-200 bg-white/50";
+            container.appendChild(previewCanvas);
+
+            // 5. 更新尺寸資訊標籤
+            const info = document.getElementById(`info-${id}`);
+            info.innerText = `輸出: ${pixelW} × ${pixelH} px`;
+        }
+
+
+        function removeImage(id) {
+            imagesData.delete(id);
+            const card = document.getElementById(`card-${id}`);
+            if (card) card.remove();
+            updateBatchDownloadButton();
+        }
+
+        function updateBatchDownloadButton() {
+            if (imagesData.size > 1) {
+                btnBatchDownload.classList.remove('hidden');
+            } else {
+                btnBatchDownload.classList.add('hidden');
+            }
+        }
+
+        /**
+         * 單張下載（支援 PNG / JPG）
+         */
+        function downloadSingle(id) {
+            const data = imagesData.get(id);
+            if (!data || !data.currentCanvas) return;
+
+            const formatSelect = document.getElementById(`format-${id}`);
+            const qualityInput = document.getElementById(`quality-${id}`);
+            const format = formatSelect ? formatSelect.value : 'png';
+            const quality = qualityInput ? (parseInt(qualityInput.value, 10) || 92) / 100 : 0.92;
+
+            const suffix = data.settings.unit === 'mm' 
+                ? `_${data.settings.width}x${data.settings.height}mm` 
+                : `_${data.settings.width}x${data.settings.height}px`;
+            const ext = format === 'jpeg' ? 'jpg' : 'png';
+            const filename = `${data.originalName}${suffix}.${ext}`;
+
+            const mime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
+            // JPEG 不支援透明；若仍為透明會被瀏覽器填黑，此處已在切換格式時改白底
+            const dataUrl = data.currentCanvas.toDataURL(mime, format === 'jpeg' ? quality : 1.0);
+
+            const link = document.createElement('a');
+            link.download = filename;
+            link.href = dataUrl;
+            link.click();
+        }
+
+        /**
+         * 批次下載 (使用 JSZip 壓縮成 ZIP 檔)
+         */
+        btnBatchDownload.addEventListener('click', async () => {
+            if (imagesData.size === 0) return;
+
+            // 改變按鈕狀態
+            const originalText = btnBatchDownload.innerHTML;
+            btnBatchDownload.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> 處理中...`;
+            btnBatchDownload.disabled = true;
+
+            try {
+                const zip = new JSZip();
+                
+                // 處理每一張圖片為 Blob
+                const promises = Array.from(imagesData.values()).map(data => {
+                    return new Promise((resolve) => {
+                        const suffix = data.settings.unit === 'mm' 
+                            ? `_${data.settings.width}x${data.settings.height}mm` 
+                            : `_${data.settings.width}x${data.settings.height}px`;
+                        const formatSelect = document.getElementById(`format-${data.id}`);
+                        const qualityInput = document.getElementById(`quality-${data.id}`);
+                        const format = formatSelect ? formatSelect.value : 'png';
+                        const quality = qualityInput ? (parseInt(qualityInput.value, 10) || 92) / 100 : 0.92;
+                        const ext = format === 'jpeg' ? 'jpg' : 'png';
+                        const mime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
+                        const filename = `${data.originalName}${suffix}.${ext}`;
+                        
+                        data.currentCanvas.toBlob((blob) => {
+                            zip.file(filename, blob);
+                            resolve();
+                        }, mime, format === 'jpeg' ? quality : 1.0);
+                    });
+                });
+
+                await Promise.all(promises);
+
+                // 生成 ZIP 檔案並觸發下載
+                const zipBlob = await zip.generateAsync({ type: 'blob' });
+                const url = URL.createObjectURL(zipBlob);
+                
+                const link = document.createElement('a');
+                link.href = url;
+                const dateStr = new Date().toISOString().slice(0,10).replace(/-/g,"");
+                link.download = `Resized_Images_${dateStr}.zip`;
+                link.click();
+                
+                URL.revokeObjectURL(url);
+            } catch (error) {
+                console.error("ZIP Generation Failed:", error);
+                alert("生成壓縮檔時發生錯誤。");
+            } finally {
+                // 恢復按鈕狀態
+                btnBatchDownload.innerHTML = originalText;
+                btnBatchDownload.disabled = false;
+            }
+        });
+
+    </script>
+</body>
+</html>
